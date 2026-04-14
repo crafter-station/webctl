@@ -1,0 +1,33 @@
+[workspace]
+members = [
+  "crates/webctl-app",
+  "crates/webctl-ir",
+  "crates/webctl-probe",
+  "crates/webctl-classifier",
+  "crates/webctl-emit-cli",
+  "crates/webctl-install",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1"
+camino = "1"
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+directories = "6"
+indicatif = "0.17"
+miette = { version = "7", features = ["fancy"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+regex = "1"
+url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
