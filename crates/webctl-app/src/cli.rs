@@ -209,16 +209,35 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
         output_dir: output_dir.clone(),
     };
 
+    eprintln!("⠋ Connecting to browser on port 9222...");
     let browser = webctl_probe::agent_browser::BrowserProcess {
         child_id: 0,
         cdp_port: 9222,
         profile_dir: std::path::PathBuf::new(),
     };
-    let session = webctl_probe::agent_browser::connect_session(browser, &probe_options).await?;
+    let session = match webctl_probe::agent_browser::connect_session(browser, &probe_options).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("✗ Cannot connect to browser on port 9222\n");
+            eprintln!("  webctl needs a Chromium browser with remote debugging enabled.");
+            eprintln!("  Start one with:\n");
+            eprintln!("    # Comet (Perplexity)");
+            eprintln!("    /Applications/Comet.app/Contents/MacOS/Comet --remote-debugging-port=9222 &\n");
+            eprintln!("    # Chrome");
+            eprintln!("    /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 &\n");
+            eprintln!("  Then retry:");
+            eprintln!("    webctl recon {} {}", args.url, if args.auto { "--auto" } else { "" });
+            return Err(e);
+        }
+    };
+    eprintln!("✓ Connected");
+
+    eprintln!("⠋ Starting HAR capture...");
     webctl_probe::agent_browser::start_har_capture(&session).await?;
 
     let initial_title = webctl_probe::agent_browser::get_title(&session).await.ok();
     let initial_url = webctl_probe::agent_browser::get_url(&session).await.ok();
+    eprintln!("✓ Navigated to: {}", initial_title.as_deref().unwrap_or(&args.url));
 
     let ax_pre_path = webctl_probe::paths::ax_pre_path(&output_dir);
     webctl_probe::agent_browser::take_ax_snapshot(&session, &ax_pre_path).await?;
@@ -232,14 +251,15 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
         .context("auto-recon failed")?;
         eprintln!();
         eprintln!(
-            "✓ Converged after {} iterations ({} unique pages) — {}",
-            auto_result.iterations, auto_result.pages_visited, auto_result.stop_reason
+            "✓ Explored {} pages in {} iterations — {}",
+            auto_result.pages_visited, auto_result.iterations, auto_result.stop_reason
         );
     } else {
         eprintln!("Navigate the site in the browser window, then press ENTER here when done.");
         wait_for_enter().await?;
     }
 
+    eprintln!("⠋ Finalizing capture...");
     let mut probe = webctl_probe::finalize_capture(session).await?;
 
     if let Some(ref title) = initial_title {
@@ -253,6 +273,8 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
         }
     }
 
+    eprintln!("✓ Captured {} HTTP requests", probe.har_entry_count);
+    eprintln!("⠋ Classifying site...");
     let har_bytes = webctl_probe::read_har_bytes(&probe.har_path)?;
     let har = webctl_probe::har::parse_har(&har_bytes)?;
     let ax_tree = read_optional_string(probe.ax_final_path.as_deref())?;
@@ -270,10 +292,14 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
     let view = ClassifierSuggestionView {
         bucket: suggestion.bucket.clone(),
         confidence: suggestion.confidence.clone(),
-        http_endpoint_count: http_surface.endpoints.len().max(har.log.entries.len()),
+        http_endpoint_count: http_surface.endpoints.len(),
         ax_action_count: ax_surface.as_ref().map(|surface| surface.actions.len()).unwrap_or(0),
     };
-    println!("{}", render_classifier_suggestion(&view));
+    eprintln!("✓ Classified: {} ({} confidence)",
+        classifier_bucket_label(&view.bucket),
+        confidence_label(&view.confidence),
+    );
+    eprintln!("  HTTP endpoints: {}  |  AX actions: {}", view.http_endpoint_count, view.ax_action_count);
 
     let decision = apply_user_override(suggestion, args.technique_override());
 
@@ -285,12 +311,20 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
         }
     }
 
+    eprintln!("⠋ Building IR...");
     let descriptor = build_ir(decision, probe, http_surface, ax_surface)?;
     let ir_path = output_dir.join(format!("{}.webctl.json", descriptor.meta.site_name));
     webctl_ir::write_ir(&ir_path, &descriptor)
         .with_context(|| format!("failed to write IR to {}", ir_path.display()))?;
 
-    println!("Wrote IR to {}", ir_path.display());
+    let op_count = descriptor.operations.len();
+    let ir_size = std::fs::metadata(&ir_path).map(|m| m.len()).unwrap_or(0);
+    eprintln!("✓ IR written: {} ({} operations, {}KB)", ir_path.display(), op_count, ir_size / 1024);
+    eprintln!();
+    eprintln!("Next steps:");
+    eprintln!("  webctl emit cli {}    Generate a CLI shim", ir_path.display());
+    eprintln!("  webctl install {}     Install locally", ir_path.display());
+    eprintln!("  webctl lint {}        Validate the IR", ir_path.display());
 
     Ok(descriptor)
 }
@@ -470,11 +504,13 @@ pub async fn emit_command(args: EmitArgs) -> anyhow::Result<std::path::PathBuf> 
         out_dir,
     })?;
 
-    println!(
-        "Emitted shim to {} ({} bytes)",
+    eprintln!("✓ Shim compiled: {} ({}KB)",
         emitted.binary_path.display(),
-        emitted.binary_size
+        emitted.binary_size / 1024
     );
+    eprintln!();
+    eprintln!("Next step:");
+    eprintln!("  webctl install {}", ir_path.display());
 
     Ok(emitted.binary_path)
 }
@@ -553,11 +589,31 @@ pub async fn install_command(args: InstallArgs) -> anyhow::Result<InstallSuccess
     std::fs::write(&meta_path, serde_json::to_vec_pretty(&install_record)?)
         .with_context(|| format!("failed to write install metadata to {}", meta_path.display()))?;
 
-    Ok(InstallSuccessView {
+    let in_path = std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .any(|p| std::path::Path::new(p) == dest_dir);
+
+    let hint = if in_path {
+        format!("Run: {} --help", descriptor.meta.site_name)
+    } else {
+        format!(
+            "⚠ {} is not in your PATH. Add it:\n  echo 'export PATH=\"{}:$PATH\"' >> ~/.zshrc && source ~/.zshrc\n\nThen try:\n  {} --help",
+            dest_dir.display(),
+            dest_dir.display(),
+            descriptor.meta.site_name
+        )
+    };
+
+    let view = InstallSuccessView {
         site_name: descriptor.meta.site_name.clone(),
         command_count: descriptor.operations.len(),
-        hint: format!("make sure {} is on PATH", dest_dir.display()),
-    })
+        hint,
+    };
+    eprintln!("✓ Installed: {} ({} commands)", view.site_name, view.command_count);
+    eprintln!("{}", view.hint);
+
+    Ok(view)
 }
 
 pub fn render_classifier_suggestion(view: &ClassifierSuggestionView) -> String {
