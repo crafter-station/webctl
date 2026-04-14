@@ -1,0 +1,85 @@
+- generic
+  - generic
+    - navigation
+      - generic
+        - link "Gmail " [ref=e17]
+          - StaticText "Gmail"
+        - link "Search for Images " [ref=e18]
+          - StaticText "Images"
+      - button "Google apps" [expanded=false, ref=e19]
+        - image
+      - button "Google Account: Demo User (demo@example.com)" [expanded=false, ref=e8]
+    - image "Google"
+    - search
+      - generic
+        - generic
+          - generic
+            - button "Upload files or images" [ref=e29]
+          - combobox "Search" [expanded=false, ref=e20]
+          - button "Search by voice" [ref=e21]
+          - button "Search by image" [ref=e22]
+          - link "AI Mode" [ref=e23]
+        - generic
+          - button "Google Search" [ref=e24]
+          - button "I'm Feeling Lucky" [ref=e25]
+    - generic
+      - StaticText "Google offered in: "
+      - link "Español (Latinoamérica)" [ref=e9]
+      - StaticText " "
+      - link "Quechua" [ref=e10]
+    - contentinfo
+      - StaticText "Peru"
+      - link "About" [ref=e1]
+      - link "Advertising" [ref=e2]
+      - link "Business" [ref=e3]
+      - link "How Search works" [ref=e4]
+      - link "Privacy" [ref=e5]
+      - link "Terms" [ref=e6]
+      - button "Settings" [expanded=false, ref=e7]
+  - generic
+    - generic
+      - image
+      - paragraph
+      - StaticText "beta 0.27"
+      - button [ref=e11]
+    - generic
+      - paragraph
+      - paragraph
+      - LabelText
+      - paragraph
+      - paragraph
+      - LabelText
+      - paragraph
+      - LabelText
+      - paragraph
+      - LabelText
+      - paragraph
+      - LabelText
+      - paragraph
+      - paragraph
+      - LabelText
+      - paragraph
+      - LabelText
+      - paragraph
+      - LabelText
+      - paragraph
+      - LabelText
+      - paragraph
+      - LabelText
+      - button "Add Custom URL" [ref=e12]
+      - paragraph
+      - link "Join Discord" [ref=e13]
+      - link "Donate" [ref=e14]
+      - link "Rate Us" [ref=e15]
+    - generic
+      - button "00:00:00" [ref=e26]
+      - button "Turn On" [ref=e27]
+    - button [ref=e16]
+      - image
+    - generic
+      - paragraph
+      - LabelText
+        - textbox "Title" [ref=e30]
+      - generic
+        - button [ref=e31]
+      - button "Add to Block Sites" [ref=e28]

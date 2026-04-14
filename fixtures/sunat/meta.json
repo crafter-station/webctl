@@ -1,0 +1,14 @@
+{
+  "site": "sunat",
+  "url": "https://www.sunat.gob.pe",
+  "final_url": "https://e-menu.sunat.gob.pe/cl-ti-itmenu/MenuInternet.htm?pestana=*&agrupacion=*#",
+  "final_title": "SUNAT - Menú SOL",
+  "duration_sec": 639,
+  "start": "2026-04-11T02:58:02Z",
+  "end": "2026-04-11T03:08:41Z",
+  "phase": "B-authenticated",
+  "har_raw_bytes": 1549122,
+  "har_sanitized_bytes": 1553121,
+  "entry_count": 412,
+  "ax_final_lines": 25
+}
