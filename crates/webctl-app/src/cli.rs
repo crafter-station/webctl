@@ -85,6 +85,7 @@ pub enum Commands {
     Exec(ExecArgs),
     Auth(AuthArgs),
     Check(CheckArgs),
+    Shell,
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -238,6 +239,7 @@ pub async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         Commands::Exec(args) => exec_command(args).await,
         Commands::Auth(args) => auth_command(args).await,
         Commands::Check(args) => check_command(args).await,
+        Commands::Shell => shell_command().await,
     }
 }
 
@@ -968,6 +970,10 @@ async fn open_item_by_index(
     Ok(())
 }
 
+async fn shell_command() -> anyhow::Result<()> {
+    crate::shell::run_shell().await
+}
+
 async fn auth_command(args: AuthArgs) -> anyhow::Result<()> {
     match args.action {
         AuthAction::Login(login) => auth_login(login).await,
@@ -1047,7 +1053,7 @@ async fn auth_logout(args: AuthLogoutArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn check_command(args: CheckArgs) -> anyhow::Result<()> {
+pub async fn check_command(args: CheckArgs) -> anyhow::Result<()> {
     let home = home_dir()?;
     let ir_path = webctl_ir::site_ir_path(&home, &args.site);
     if !ir_path.exists() {

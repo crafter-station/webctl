@@ -30,6 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 owo-colors = "4"
 regex = "1"
+rustyline = "15"
 scraper = "0.22"
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }

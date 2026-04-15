@@ -5,6 +5,7 @@ mod cli;
 mod commands;
 mod execute;
 mod extract;
+mod shell;
 mod ui;
 
 pub use cli::*;
