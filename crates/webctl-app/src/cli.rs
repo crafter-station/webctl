@@ -84,6 +84,12 @@ pub enum Commands {
     Lint(LintArgs),
     Exec(ExecArgs),
     Auth(AuthArgs),
+    Check(CheckArgs),
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct CheckArgs {
+    pub site: String,
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -231,6 +237,7 @@ pub async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         Commands::Lint(args) => lint::run(args),
         Commands::Exec(args) => exec_command(args).await,
         Commands::Auth(args) => auth_command(args).await,
+        Commands::Check(args) => check_command(args).await,
     }
 }
 
@@ -1038,6 +1045,111 @@ async fn auth_logout(args: AuthLogoutArgs) -> anyhow::Result<()> {
         hint(&format!("Site '{}' was not logged in.", args.site));
     }
     Ok(())
+}
+
+async fn check_command(args: CheckArgs) -> anyhow::Result<()> {
+    let home = home_dir()?;
+    let ir_path = webctl_ir::site_ir_path(&home, &args.site);
+    if !ir_path.exists() {
+        return Err(anyhow!("site '{}' not installed", args.site));
+    }
+
+    let descriptor = webctl_ir::read_ir(&ir_path)?;
+    let fingerprint_path = webctl_ir::site_dir(&home, &args.site).join("fingerprint.json");
+
+    let base = url::Url::parse(&descriptor.meta.source_url)
+        .map(|u| format!("{}://{}", u.scheme(), u.host_str().unwrap_or("localhost")))
+        .unwrap_or_else(|_| descriptor.meta.source_url.clone());
+
+    let canaries: Vec<&webctl_ir::HttpEndpoint> = descriptor
+        .http
+        .as_ref()
+        .map(|h| h.endpoints.iter().take(3).collect())
+        .unwrap_or_default();
+
+    if canaries.is_empty() {
+        warn("No HTTP endpoints to check drift against.");
+        return Ok(());
+    }
+
+    step(&format!("Checking {} canary endpoints for {}...", canaries.len(), args.site));
+
+    let mut current: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for ep in &canaries {
+        let url = format!("{}{}", base, ep.path);
+        match reqwest_head(&url).await {
+            Ok(sig) => {
+                current.insert(ep.path.clone(), sig);
+            }
+            Err(e) => {
+                warn(&format!("  {} → failed: {}", ep.path, e));
+            }
+        }
+    }
+
+    if current.is_empty() {
+        err("Could not reach any canary endpoints.");
+        return Err(anyhow!("drift check failed — site unreachable"));
+    }
+
+    if !fingerprint_path.exists() {
+        let json = serde_json::to_string_pretty(&current)?;
+        std::fs::write(&fingerprint_path, &json)?;
+        ok(&format!("Baseline fingerprint saved ({} endpoints)", current.len()));
+        hint("Run 'webctl check' again later to detect drift.");
+        return Ok(());
+    }
+
+    let stored: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&std::fs::read_to_string(&fingerprint_path)?)?;
+
+    let mut drifted = Vec::new();
+    let mut matched = 0;
+
+    for (path, current_sig) in &current {
+        if let Some(stored_sig) = stored.get(path) {
+            if current_sig != stored_sig {
+                drifted.push(path.clone());
+            } else {
+                matched += 1;
+            }
+        } else {
+            drifted.push(path.clone());
+        }
+    }
+
+    if drifted.is_empty() {
+        ok(&format!("No drift detected ({}/{} endpoints match)", matched, current.len()));
+    } else {
+        warn(&format!("Drift detected in {} endpoint(s):", drifted.len()));
+        for path in &drifted {
+            hint(&format!("  {path}"));
+        }
+        eprintln!();
+        hint("The site may have changed. Re-run recon to update:");
+        cmd(&format!("webctl recon {} --auto --yes", descriptor.meta.source_url));
+        cmd(&format!("webctl install <new-ir-path>"));
+
+        let json = serde_json::to_string_pretty(&current)?;
+        std::fs::write(&fingerprint_path, &json)?;
+        hint("Fingerprint updated.");
+    }
+
+    Ok(())
+}
+
+async fn reqwest_head(url: &str) -> anyhow::Result<String> {
+    let output = tokio::process::Command::new("curl")
+        .args(["-sf", "-o", "/dev/null", "-w", "%{http_code}|%{content_type}|%{size_download}", url])
+        .output()
+        .await
+        .context("failed to curl")?;
+
+    if !output.status.success() {
+        return Err(anyhow!("curl failed"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn save_last_command(site_name: &str, command: &str) {
