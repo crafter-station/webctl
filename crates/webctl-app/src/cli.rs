@@ -238,9 +238,24 @@ async fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -
 
     let is_open = args.args.first().map(|a| a.as_str()) == Some("open");
     if is_open {
-        let index_str = args.args.get(1).context("usage: <site> open <index>")?;
-        let index: usize = index_str.parse().context("index must be a number")?;
-        return open_item_by_index(descriptor, &args.site, index).await;
+        let remaining: Vec<&str> = args.args[1..].iter().map(|s| s.as_str()).collect();
+
+        let (from_cmd, index_str) = if remaining.len() >= 2 {
+            if let Ok(idx) = remaining.last().unwrap().parse::<usize>() {
+                (Some(remaining[..remaining.len()-1].join(" ")), idx)
+            } else {
+                return Err(anyhow!("usage: {site} open [command] <index>\n\nExamples:\n  {site} open 1           Open item #1 from last listed command\n  {site} open news 3      Open item #3 from 'news' command", site = args.site));
+            }
+        } else if remaining.len() == 1 {
+            let idx: usize = remaining[0].parse().context(
+                format!("usage: {site} open [command] <index>\n\nExamples:\n  {site} open 1           Open item #1\n  {site} open news 3      Open item #3 from 'news'", site = args.site)
+            )?;
+            (None, idx)
+        } else {
+            return Err(anyhow!("usage: {site} open [command] <index>", site = args.site));
+        };
+
+        return open_item_by_index(descriptor, &args.site, index_str, from_cmd.as_deref()).await;
     }
 
     if is_help {
@@ -292,6 +307,8 @@ async fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -
     };
 
     if let Some(ref extractor) = operation.extractor {
+        save_last_command(&args.site, &command_key);
+
         let html = crate::execute::fetch_raw_html(&url).await
             .with_context(|| format!("failed to fetch {url}"))?;
 
@@ -808,9 +825,27 @@ async fn open_item_by_index(
     descriptor: &webctl_ir::SiteDescriptor,
     site_name: &str,
     index: usize,
+    from_command: Option<&str>,
 ) -> anyhow::Result<()> {
-    let first_extractable = descriptor.operations.iter().find(|op| op.extractor.is_some());
-    let Some(operation) = first_extractable else {
+    let operation = if let Some(cmd) = from_command {
+        descriptor.operations.iter().find(|op| {
+            op.command_path.join(" ") == cmd && op.extractor.is_some()
+        }).or_else(|| {
+            descriptor.operations.iter().find(|op| op.extractor.is_some())
+        })
+    } else {
+        load_last_command(site_name)
+            .and_then(|last| {
+                descriptor.operations.iter().find(|op| {
+                    op.command_path.join(" ") == last && op.extractor.is_some()
+                })
+            })
+            .or_else(|| {
+                descriptor.operations.iter().find(|op| op.extractor.is_some())
+            })
+    };
+
+    let Some(operation) = operation else {
         return Err(anyhow!("no extractors configured for site '{site_name}'. Re-run recon to detect structure."));
     };
 
@@ -846,6 +881,21 @@ async fn open_item_by_index(
 
     open_url_in_browser(item_url).await?;
     Ok(())
+}
+
+fn save_last_command(site_name: &str, command: &str) {
+    if let Ok(home) = std::env::var("HOME") {
+        let state_path = webctl_ir::site_dir(&std::path::PathBuf::from(home), site_name)
+            .join("last-command");
+        let _ = std::fs::write(state_path, command);
+    }
+}
+
+fn load_last_command(site_name: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let state_path = webctl_ir::site_dir(&std::path::PathBuf::from(home), site_name)
+        .join("last-command");
+    std::fs::read_to_string(state_path).ok()
 }
 
 async fn open_url_in_browser(url: &str) -> anyhow::Result<()> {
