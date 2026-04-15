@@ -194,13 +194,30 @@ fn is_external(url: &str, visited: &HashSet<String>) -> bool {
         return false;
     };
 
+    let target_base = base_domain(host);
+
     !visited.iter().any(|v| {
         url::Url::parse(v)
             .ok()
             .and_then(|u| u.host_str().map(|h| h.to_string()))
-            .map(|h| h == host)
+            .map(|h| base_domain(&h) == target_base)
             .unwrap_or(false)
     })
+}
+
+fn base_domain(host: &str) -> String {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() <= 2 {
+        return host.to_lowercase();
+    }
+    let tld_len = if parts.len() >= 3
+        && matches!(parts[parts.len() - 2], "gob" | "gov" | "co" | "com" | "org" | "net" | "edu" | "ac")
+    {
+        3
+    } else {
+        2
+    };
+    parts[parts.len().saturating_sub(tld_len)..].join(".").to_lowercase()
 }
 
 fn normalize_url(url: &str) -> String {
