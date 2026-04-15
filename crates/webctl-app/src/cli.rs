@@ -236,6 +236,13 @@ async fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -
     let is_help = args.args.is_empty()
         || args.args.iter().any(|a| a == "--help" || a == "-h");
 
+    let is_open = args.args.first().map(|a| a.as_str()) == Some("open");
+    if is_open {
+        let index_str = args.args.get(1).context("usage: <site> open <index>")?;
+        let index: usize = index_str.parse().context("index must be a number")?;
+        return open_item_by_index(descriptor, &args.site, index).await;
+    }
+
     if is_help {
         let help = if crate::execute::use_color() {
             webctl_emit_cli::build_help_text_colored(descriptor)
@@ -442,8 +449,41 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
         }
     }
 
+    step("Detecting extractors...");
+    let mut endpoint_extractors: std::collections::HashMap<usize, webctl_ir::Extractor> =
+        std::collections::HashMap::new();
+    let will_use_http = matches!(
+        decision,
+        webctl_classifier::TechniqueDecision::HttpOnly | webctl_classifier::TechniqueDecision::Hybrid
+    );
+    if will_use_http {
+        for (i, endpoint) in http_surface.endpoints.iter().enumerate() {
+            let ep_url = {
+                let base = initial_url.as_deref().and_then(|u| {
+                    url::Url::parse(u).ok().map(|p| format!("{}://{}", p.scheme(), p.host_str().unwrap_or("localhost")))
+                }).unwrap_or_else(|| args.url.clone());
+                format!("{}{}", base.trim_end_matches('/'), endpoint.path)
+            };
+            match crate::execute::fetch_raw_html(&ep_url).await {
+                Ok(html) => {
+                    if let Some(extractor) = webctl_probe::auto_extract::detect_extractor(&html, &ep_url).await {
+                        let field_count = match &extractor {
+                            webctl_ir::Extractor::List(l) => l.fields.len(),
+                            _ => 0,
+                        };
+                        hint(&format!("  {} → {} fields detected", endpoint.path, field_count));
+                        endpoint_extractors.insert(i, extractor);
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    let extractor_count = endpoint_extractors.len();
+    ok(&format!("Detected extractors for {} endpoints", extractor_count));
+
     step("Building IR...");
-    let descriptor = build_ir(decision, probe, http_surface, ax_surface)?;
+    let descriptor = build_ir(decision, probe, http_surface, ax_surface, endpoint_extractors)?;
     let ir_path = output_dir.join(format!("{}.webctl.json", descriptor.meta.site_name));
     webctl_ir::write_ir(&ir_path, &descriptor)
         .with_context(|| format!("failed to write IR to {}", ir_path.display()))?;
@@ -503,6 +543,7 @@ pub fn build_ir(
     probe: webctl_probe::ProbeCapture,
     http: webctl_ir::HttpSurface,
     ax: Option<webctl_ir::AxSurface>,
+    endpoint_extractors: std::collections::HashMap<usize, webctl_ir::Extractor>,
 ) -> anyhow::Result<webctl_ir::SiteDescriptor> {
     let source_url = probe
         .final_url
@@ -549,6 +590,7 @@ pub fn build_ir(
             } else {
                 endpoint.description.clone()
             };
+            let extractor = endpoint_extractors.get(&index).cloned();
             operations.push(webctl_ir::OperationDescriptor {
                 command_path,
                 summary,
@@ -557,7 +599,7 @@ pub fn build_ir(
                 transport: webctl_ir::OperationTransport::Http(webctl_ir::HttpOperation {
                     endpoint_index: index,
                 }),
-                extractor: None,
+                extractor,
             });
         }
     }
@@ -760,6 +802,67 @@ pub fn render_install_progress(view: &InstallProgressView) {
     } else {
         eprintln!("⠋ Installing IR from {} (version {})", view.source_label, view.version_label);
     }
+}
+
+async fn open_item_by_index(
+    descriptor: &webctl_ir::SiteDescriptor,
+    site_name: &str,
+    index: usize,
+) -> anyhow::Result<()> {
+    let first_extractable = descriptor.operations.iter().find(|op| op.extractor.is_some());
+    let Some(operation) = first_extractable else {
+        return Err(anyhow!("no extractors configured for site '{site_name}'. Re-run recon to detect structure."));
+    };
+
+    let extractor = operation.extractor.as_ref().unwrap();
+    let url = match &operation.transport {
+        webctl_ir::OperationTransport::Http(http_op) => {
+            let endpoint = descriptor.http.as_ref()
+                .and_then(|h| h.endpoints.get(http_op.endpoint_index))
+                .context("endpoint not found")?;
+            let base = url::Url::parse(&descriptor.meta.source_url)
+                .map(|u| format!("{}://{}", u.scheme(), u.host_str().unwrap_or("localhost")))
+                .unwrap_or_else(|_| descriptor.meta.source_url.clone());
+            format!("{}{}", base, endpoint.path)
+        }
+        _ => return Err(anyhow!("open requires an HTTP operation")),
+    };
+
+    step(&format!("Fetching {} to find item #{}...", operation.command_path.join(" "), index));
+    let html = crate::execute::fetch_raw_html(&url).await?;
+
+    let items = crate::extract::extract_items(&html, extractor)
+        .context("extraction failed — no items found on page")?;
+
+    let item = items.iter().find(|i| i.index == index)
+        .ok_or_else(|| anyhow!("item #{index} not found. Page has {} items (1-{})", items.len(), items.len()))?;
+
+    let item_url = item.primary_url()
+        .ok_or_else(|| anyhow!("item #{index} has no URL field"))?;
+
+    let title = item.primary_title().unwrap_or("(untitled)");
+    ok(&format!("Opening: {}", title));
+    hint(item_url);
+
+    open_url_in_browser(item_url).await?;
+    Ok(())
+}
+
+async fn open_url_in_browser(url: &str) -> anyhow::Result<()> {
+    let cmd = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "start"
+    } else {
+        "xdg-open"
+    };
+
+    tokio::process::Command::new(cmd)
+        .arg(url)
+        .spawn()
+        .with_context(|| format!("failed to open browser with {cmd}"))?;
+
+    Ok(())
 }
 
 fn fallback_http_command_path(index: usize, endpoint_path: &str) -> Vec<String> {

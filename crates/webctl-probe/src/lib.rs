@@ -1,4 +1,5 @@
 pub mod agent_browser;
+pub mod auto_extract;
 pub mod auto_recon;
 pub mod capture;
 pub mod har;

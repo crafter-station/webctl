@@ -210,8 +210,17 @@ pub async fn snapshot_text(session: &ProbeSession) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn agent_browser_bin() -> &'static str {
-    "/Users/demouser/.local/bin/agent-browser"
+fn agent_browser_bin() -> String {
+    if let Ok(bin) = std::env::var("AGENT_BROWSER_BIN") {
+        return bin;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let local = format!("{home}/.local/bin/agent-browser");
+        if std::path::Path::new(&local).exists() {
+            return local;
+        }
+    }
+    "agent-browser".to_string()
 }
 
 fn session_name_for_url(raw_url: &str) -> anyhow::Result<String> {
