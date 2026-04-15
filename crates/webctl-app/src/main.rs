@@ -4,6 +4,7 @@ use tracing_subscriber::fmt::init;
 mod cli;
 mod commands;
 mod execute;
+mod extract;
 mod ui;
 
 pub use cli::*;

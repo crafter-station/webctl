@@ -115,6 +115,137 @@ fn format_content_line(line: &str, color: bool) -> String {
     line.to_string()
 }
 
+pub async fn fetch_raw_html(url: &str) -> anyhow::Result<String> {
+    let output = Command::new("defuddle")
+        .args(["parse", url, "--json"])
+        .output()
+        .await
+        .context("failed to run defuddle")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("defuddle failed: {stderr}"));
+    }
+
+    let parsed: DefuddleOutput = serde_json::from_slice(&output.stdout)
+        .context("failed to parse defuddle output")?;
+
+    Ok(parsed.content)
+}
+
+pub fn format_extracted_human(
+    items: &[webctl_ir::ExtractedItem],
+    site_name: &str,
+    command: &str,
+    title: &str,
+    descriptor: &webctl_ir::SiteDescriptor,
+) -> String {
+    let color = use_color();
+    let mut out = String::new();
+
+    let header = format!("{} — {}", site_name, title);
+    if color {
+        out.push_str(&format!("\n  {}\n\n", header.bold()));
+    } else {
+        out.push_str(&format!("\n  {header}\n\n"));
+    }
+
+    let page_size = 15;
+    for item in items.iter().take(page_size) {
+        let title_text = item.primary_title().unwrap_or("(untitled)");
+        let url_text = item.get_text("domain")
+            .or_else(|| item.get_url("url").map(|u| {
+                url::Url::parse(u).ok()
+                    .and_then(|p| p.host_str().map(|h| h.to_string()))
+                    .unwrap_or_default()
+                    .leak() as &str
+            }))
+            .unwrap_or("");
+
+        if color {
+            out.push_str(&format!("  {}  {}\n",
+                format!("{:>3}", item.index).green().bold(),
+                title_text.white().bold(),
+            ));
+            if !url_text.is_empty() {
+                out.push_str(&format!("      {}", url_text.cyan()));
+            }
+            if let Some(n) = item.get_number("points") {
+                out.push_str(&format!(" · {} pts", (n as u64).to_string().yellow()));
+            }
+            if let Some(author) = item.get_text("author") {
+                out.push_str(&format!(" · {}", author.dimmed()));
+            }
+            out.push('\n');
+        } else {
+            out.push_str(&format!("  {:>3}  {}\n", item.index, title_text));
+            let mut meta = Vec::new();
+            if !url_text.is_empty() { meta.push(url_text.to_string()); }
+            if let Some(n) = item.get_number("points") { meta.push(format!("{} pts", n as u64)); }
+            if let Some(author) = item.get_text("author") { meta.push(author.to_string()); }
+            if !meta.is_empty() {
+                out.push_str(&format!("       {}\n", meta.join(" · ")));
+            }
+        }
+    }
+
+    if items.len() > page_size {
+        let more = format!("Showing 1-{} of {}", page_size, items.len());
+        if color {
+            out.push_str(&format!("\n  {}\n", more.dimmed()));
+        } else {
+            out.push_str(&format!("\n  {more}\n"));
+        }
+    }
+
+    out.push('\n');
+
+    let has_urls = items.iter().any(|i| i.primary_url().is_some());
+    if color {
+        out.push_str(&format!("  {}\n", "Drill down:".dimmed()));
+        if has_urls {
+            out.push_str(&format!("    {}     {}\n",
+                format!("{site_name} open 1").cyan(),
+                "Open item #1 in browser".dimmed()));
+        }
+        out.push_str(&format!("    {}  {}\n",
+            format!("{site_name} {command} --json").cyan(),
+            "Machine-readable output".dimmed()));
+    } else {
+        out.push_str("  Drill down:\n");
+        if has_urls {
+            out.push_str(&format!("    {site_name} open 1     Open item #1 in browser\n"));
+        }
+        out.push_str(&format!("    {site_name} {command} --json  Machine-readable output\n"));
+    }
+
+    out.push_str(&webctl_emit_cli::build_next_steps_after_exec(
+        site_name, command, descriptor, color,
+    ));
+
+    out
+}
+
+pub fn format_extracted_json(items: &[webctl_ir::ExtractedItem], url: &str, title: &str) -> anyhow::Result<String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StructuredResult<'a> {
+        url: &'a str,
+        title: &'a str,
+        item_count: usize,
+        items: &'a [webctl_ir::ExtractedItem],
+    }
+
+    let result = StructuredResult {
+        url,
+        title,
+        item_count: items.len(),
+        items,
+    };
+
+    serde_json::to_string_pretty(&result).context("failed to serialize extracted items")
+}
+
 pub fn format_json(result: &ExecResult) -> anyhow::Result<String> {
     serde_json::to_string_pretty(result).context("failed to serialize exec result")
 }

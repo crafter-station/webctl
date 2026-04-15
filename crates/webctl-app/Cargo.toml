@@ -13,6 +13,7 @@ clap.workspace = true
 indicatif.workspace = true
 miette.workspace = true
 owo-colors.workspace = true
+scraper.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

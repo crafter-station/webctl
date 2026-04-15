@@ -284,6 +284,24 @@ async fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -
         }
     };
 
+    if let Some(ref extractor) = operation.extractor {
+        let html = crate::execute::fetch_raw_html(&url).await
+            .with_context(|| format!("failed to fetch {url}"))?;
+
+        if let Some(items) = crate::extract::extract_items(&html, extractor) {
+            if is_json {
+                let json = crate::execute::format_extracted_json(&items, &url, &descriptor.meta.display_name)?;
+                println!("{json}");
+            } else {
+                let formatted = crate::execute::format_extracted_human(
+                    &items, &args.site, &command_key, &descriptor.meta.display_name, descriptor,
+                );
+                println!("{formatted}");
+            }
+            return Ok(());
+        }
+    }
+
     let result = crate::execute::fetch_page(&url).await
         .with_context(|| format!("failed to fetch {url}"))?;
 
