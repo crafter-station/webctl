@@ -28,6 +28,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+owo-colors = "4"
 regex = "1"
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }

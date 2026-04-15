@@ -1,9 +1,10 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
+use owo_colors::OwoColorize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use url::Url;
 use webctl_classifier::ax_stub::extract_ax_actions;
@@ -11,6 +12,58 @@ use webctl_classifier::http_infer::infer_endpoints;
 
 use crate::commands::{emit, install, lint, recon};
 use crate::ui::prompt;
+
+fn use_color() -> bool {
+    std::env::var("NO_COLOR").is_err() && std::io::stderr().is_terminal()
+}
+
+fn ok(msg: &str) {
+    if use_color() {
+        eprintln!("{} {}", "✓".green(), msg);
+    } else {
+        eprintln!("✓ {msg}");
+    }
+}
+
+fn step(msg: &str) {
+    if use_color() {
+        eprintln!("{} {}", "⠋".cyan(), msg);
+    } else {
+        eprintln!("⠋ {msg}");
+    }
+}
+
+fn warn(msg: &str) {
+    if use_color() {
+        eprintln!("{} {}", "⚠".yellow(), msg);
+    } else {
+        eprintln!("⚠ {msg}");
+    }
+}
+
+fn err(msg: &str) {
+    if use_color() {
+        eprintln!("{} {}", "✗".red(), msg);
+    } else {
+        eprintln!("✗ {msg}");
+    }
+}
+
+fn hint(msg: &str) {
+    if use_color() {
+        eprintln!("  {}", msg.dimmed());
+    } else {
+        eprintln!("  {msg}");
+    }
+}
+
+fn cmd(msg: &str) {
+    if use_color() {
+        eprintln!("    {}", msg.cyan());
+    } else {
+        eprintln!("    {msg}");
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "webctl", about = "CLI-ify the web")]
@@ -248,7 +301,7 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
         output_dir: output_dir.clone(),
     };
 
-    eprintln!("⠋ Connecting to browser on port 9222...");
+    step("Connecting to browser on port 9222...");
     let browser = webctl_probe::agent_browser::BrowserProcess {
         child_id: 0,
         cdp_port: 9222,
@@ -257,48 +310,61 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
     let session = match webctl_probe::agent_browser::connect_session(browser, &probe_options).await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("✗ Cannot connect to browser on port 9222\n");
-            eprintln!("  webctl needs a Chromium browser with remote debugging enabled.");
-            eprintln!("  Start one with:\n");
-            eprintln!("    # Comet (Perplexity)");
-            eprintln!("    /Applications/Comet.app/Contents/MacOS/Comet --remote-debugging-port=9222 &\n");
-            eprintln!("    # Chrome");
-            eprintln!("    /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 &\n");
-            eprintln!("  Then retry:");
-            eprintln!("    webctl recon {} {}", args.url, if args.auto { "--auto" } else { "" });
+            err("Cannot connect to browser on port 9222");
+            eprintln!();
+            hint("webctl needs a Chromium browser with remote debugging enabled.");
+            hint("Start one with:");
+            eprintln!();
+            hint("# Comet (Perplexity)");
+            cmd("/Applications/Comet.app/Contents/MacOS/Comet --remote-debugging-port=9222 &");
+            eprintln!();
+            hint("# Chrome");
+            cmd("/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 &");
+            eprintln!();
+            hint("Then retry:");
+            cmd(&format!("webctl recon {} {}", args.url, if args.auto { "--auto" } else { "" }));
             return Err(e);
         }
     };
-    eprintln!("✓ Connected");
+    ok("Connected");
 
-    eprintln!("⠋ Starting HAR capture...");
+    step("Starting HAR capture...");
     webctl_probe::agent_browser::start_har_capture(&session).await?;
 
     let initial_title = webctl_probe::agent_browser::get_title(&session).await.ok();
     let initial_url = webctl_probe::agent_browser::get_url(&session).await.ok();
-    eprintln!("✓ Navigated to: {}", initial_title.as_deref().unwrap_or(&args.url));
+    ok(&format!("Navigated to: {}", initial_title.as_deref().unwrap_or(&args.url)));
 
     let ax_pre_path = webctl_probe::paths::ax_pre_path(&output_dir);
     webctl_probe::agent_browser::take_ax_snapshot(&session, &ax_pre_path).await?;
 
     if args.auto {
-        eprintln!("⠋ Auto-exploring {}...", args.url);
-        let auto_result = webctl_probe::run_auto_recon(&session, |iter, elements, url| {
-            eprint!("\r  iter {iter}/15  elements: {elements:<4}  current: {url}          ");
+        step(&format!("Auto-exploring {}...", args.url));
+        let color = use_color();
+        let auto_result = webctl_probe::run_auto_recon(&session, move |iter, elements, url| {
+            if color {
+                eprint!("\r  {} {}/15  {} {:<4}  {} {}          ",
+                    "iter".dimmed(), iter.to_string().bold(),
+                    "elements:".dimmed(), elements,
+                    "→".dimmed(), url.cyan()
+                );
+            } else {
+                eprint!("\r  iter {iter}/15  elements: {elements:<4}  current: {url}          ");
+            }
         })
         .await
         .context("auto-recon failed")?;
         eprintln!();
-        eprintln!(
-            "✓ Explored {} pages in {} iterations — {}",
-            auto_result.pages_visited, auto_result.iterations, auto_result.stop_reason
-        );
+        ok(&format!("Explored {} pages in {} iterations",
+            auto_result.pages_visited, auto_result.iterations
+        ));
+        hint(&auto_result.stop_reason);
     } else {
-        eprintln!("Navigate the site in the browser window, then press ENTER here when done.");
+        step("Navigate the site in the browser window, then press ENTER here when done.");
         wait_for_enter().await?;
     }
 
-    eprintln!("⠋ Finalizing capture...");
+    step("Finalizing capture...");
     let mut probe = webctl_probe::finalize_capture(session).await?;
 
     if let Some(ref title) = initial_title {
@@ -312,8 +378,8 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
         }
     }
 
-    eprintln!("✓ Captured {} HTTP requests", probe.har_entry_count);
-    eprintln!("⠋ Classifying site...");
+    ok(&format!("Captured {} HTTP requests", probe.har_entry_count));
+    step("Classifying site...");
     let har_bytes = webctl_probe::read_har_bytes(&probe.har_path)?;
     let har = webctl_probe::har::parse_har(&har_bytes)?;
     let ax_tree = read_optional_string(probe.ax_final_path.as_deref())?;
@@ -334,11 +400,11 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
         http_endpoint_count: http_surface.endpoints.len(),
         ax_action_count: ax_surface.as_ref().map(|surface| surface.actions.len()).unwrap_or(0),
     };
-    eprintln!("✓ Classified: {} ({} confidence)",
+    ok(&format!("Classified: {} ({} confidence)",
         classifier_bucket_label(&view.bucket),
         confidence_label(&view.confidence),
-    );
-    eprintln!("  HTTP endpoints: {}  |  AX actions: {}", view.http_endpoint_count, view.ax_action_count);
+    ));
+    hint(&format!("HTTP endpoints: {}  |  AX actions: {}", view.http_endpoint_count, view.ax_action_count));
 
     let decision = apply_user_override(suggestion, args.technique_override());
 
@@ -350,7 +416,7 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
         }
     }
 
-    eprintln!("⠋ Building IR...");
+    step("Building IR...");
     let descriptor = build_ir(decision, probe, http_surface, ax_surface)?;
     let ir_path = output_dir.join(format!("{}.webctl.json", descriptor.meta.site_name));
     webctl_ir::write_ir(&ir_path, &descriptor)
@@ -358,12 +424,12 @@ pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDes
 
     let op_count = descriptor.operations.len();
     let ir_size = std::fs::metadata(&ir_path).map(|m| m.len()).unwrap_or(0);
-    eprintln!("✓ IR written: {} ({} operations, {}KB)", ir_path.display(), op_count, ir_size / 1024);
+    ok(&format!("IR written: {} ({} operations, {}KB)", ir_path.display(), op_count, ir_size / 1024));
     eprintln!();
-    eprintln!("Next steps:");
-    eprintln!("  webctl emit cli {}    Generate a CLI shim", ir_path.display());
-    eprintln!("  webctl install {}     Install locally", ir_path.display());
-    eprintln!("  webctl lint {}        Validate the IR", ir_path.display());
+    hint("Next steps:");
+    cmd(&format!("webctl install {}     Install locally", ir_path.display()));
+    cmd(&format!("webctl lint {}        Validate the IR", ir_path.display()));
+    cmd(&format!("webctl emit cli {}    Generate a CLI shim", ir_path.display()));
 
     Ok(descriptor)
 }
@@ -543,13 +609,13 @@ pub async fn emit_command(args: EmitArgs) -> anyhow::Result<std::path::PathBuf> 
         out_dir,
     })?;
 
-    eprintln!("✓ Shim compiled: {} ({}KB)",
+    ok(&format!("Shim compiled: {} ({}KB)",
         emitted.binary_path.display(),
         emitted.binary_size / 1024
-    );
+    ));
     eprintln!();
-    eprintln!("Next step:");
-    eprintln!("  webctl install {}", ir_path.display());
+    hint("Next step:");
+    cmd(&format!("webctl install {}", ir_path.display()));
 
     Ok(emitted.binary_path)
 }
@@ -633,7 +699,7 @@ pub async fn install_command(args: InstallArgs) -> anyhow::Result<InstallSuccess
         .split(':')
         .any(|p| std::path::Path::new(p) == dest_dir);
 
-    let hint = if in_path {
+    let hint_text = if in_path {
         format!("Run: {} --help", descriptor.meta.site_name)
     } else {
         format!(
@@ -647,9 +713,9 @@ pub async fn install_command(args: InstallArgs) -> anyhow::Result<InstallSuccess
     let view = InstallSuccessView {
         site_name: descriptor.meta.site_name.clone(),
         command_count: descriptor.operations.len(),
-        hint,
+        hint: hint_text,
     };
-    eprintln!("✓ Installed: {} ({} commands)", view.site_name, view.command_count);
+    ok(&format!("Installed: {} ({} commands)", view.site_name, view.command_count));
     eprintln!("{}", view.hint);
 
     Ok(view)
