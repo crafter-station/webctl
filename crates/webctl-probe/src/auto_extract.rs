@@ -29,9 +29,18 @@ pub async fn detect_extractor(html: &str, url: &str) -> Option<Extractor> {
     }
 
     let fields = match name_fields_with_llm(&best.sample_html, url).await {
-        Ok(f) if !f.is_empty() => f,
-        Ok(_) => infer_fields_heuristic(&best.sample_html),
-        Err(_) => infer_fields_heuristic(&best.sample_html),
+        Ok(f) if !f.is_empty() => {
+            tracing::debug!("LLM named {} fields for {url}", f.len());
+            f
+        }
+        Ok(_) => {
+            tracing::debug!("LLM returned empty fields for {url}, using heuristic");
+            infer_fields_heuristic(&best.sample_html)
+        }
+        Err(e) => {
+            tracing::debug!("LLM field naming failed for {url}: {e}, using heuristic");
+            infer_fields_heuristic(&best.sample_html)
+        }
     };
 
     if fields.is_empty() {
@@ -122,7 +131,7 @@ JSON:"#,
     );
 
     let output = Command::new("claude")
-        .args(["-p", "--bare", "--model", "haiku", &prompt])
+        .args(["-p", "--model", "haiku", &prompt])
         .output()
         .await
         .context("failed to call claude for field naming")?;
