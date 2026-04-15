@@ -1,15 +1,158 @@
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use anyhow::Context;
 use owo_colors::OwoColorize;
-use rustyline::DefaultEditor;
+use rustyline::completion::{Completer, Pair};
+use rustyline::error::ReadlineError;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::validate::Validator;
+use rustyline::{Config, Editor, Helper};
 
-use crate::cli::{ExecArgs, CheckArgs};
+use crate::cli::{CheckArgs, ExecArgs};
 
 struct ShellState {
     current_site: Option<String>,
     current_descriptor: Option<webctl_ir::SiteDescriptor>,
     home: PathBuf,
+    site_names: Vec<String>,
+}
+
+#[derive(Clone)]
+struct ShellCompleter {
+    site_names: Vec<String>,
+    site_commands: Vec<String>,
+    shell_commands: Vec<String>,
+    in_site: bool,
+}
+
+impl ShellCompleter {
+    fn new(site_names: &[String]) -> Self {
+        Self {
+            site_names: site_names.clone().to_vec(),
+            site_commands: Vec::new(),
+            shell_commands: vec![
+                "ls".into(), "list".into(), "open".into(), "switch".into(),
+                "back".into(), "close".into(), "check".into(), "help".into(),
+                "exit".into(), "quit".into(), "clear".into(),
+            ],
+            in_site: false,
+        }
+    }
+
+    fn enter_site(&mut self, descriptor: &webctl_ir::SiteDescriptor) {
+        self.site_commands = webctl_ir::command_help_rows(descriptor)
+            .iter()
+            .map(|r| r.command.clone())
+            .collect();
+        self.site_commands.push("--help".into());
+        self.site_commands.push("--json".into());
+        self.site_commands.push("open".into());
+        self.in_site = true;
+    }
+
+    fn leave_site(&mut self) {
+        self.site_commands.clear();
+        self.in_site = false;
+    }
+}
+
+impl Completer for ShellCompleter {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let input = &line[..pos];
+        let parts: Vec<&str> = input.split_whitespace().collect();
+
+        let (prefix, candidates) = if parts.is_empty() || (parts.len() == 1 && !input.ends_with(' ')) {
+            let prefix = parts.first().copied().unwrap_or("");
+            let mut candidates: Vec<&str> = self.shell_commands.iter().map(|s| s.as_str()).collect();
+            if self.in_site {
+                candidates.extend(self.site_commands.iter().map(|s| s.as_str()));
+            } else {
+                candidates.extend(self.site_names.iter().map(|s| s.as_str()));
+            }
+            (prefix, candidates)
+        } else if self.in_site && parts.len() >= 1 {
+            let prefix = if input.ends_with(' ') { "" } else { parts.last().copied().unwrap_or("") };
+            let candidates: Vec<&str> = self.site_commands.iter().map(|s| s.as_str()).collect();
+            (prefix, candidates)
+        } else {
+            let prefix = if input.ends_with(' ') { "" } else { parts.last().copied().unwrap_or("") };
+            let first = parts[0];
+            if first == "open" || first == "switch" {
+                (prefix, self.site_names.iter().map(|s| s.as_str()).collect())
+            } else {
+                (prefix, Vec::new())
+            }
+        };
+
+        let start = pos - prefix.len();
+        let matches: Vec<Pair> = candidates
+            .iter()
+            .filter(|c| c.starts_with(prefix))
+            .map(|c| Pair {
+                display: c.to_string(),
+                replacement: c.to_string(),
+            })
+            .collect();
+
+        Ok((start, matches))
+    }
+}
+
+impl Hinter for ShellCompleter {
+    type Hint = String;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
+        if pos < line.len() {
+            return None;
+        }
+        let input = line.trim();
+        if input.is_empty() {
+            return None;
+        }
+
+        let candidates: Vec<&str> = if self.in_site {
+            self.site_commands.iter().map(|s| s.as_str()).collect()
+        } else {
+            let mut c: Vec<&str> = self.shell_commands.iter().map(|s| s.as_str()).collect();
+            c.extend(self.site_names.iter().map(|s| s.as_str()));
+            c
+        };
+
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        let last = parts.last().copied().unwrap_or("");
+
+        candidates
+            .iter()
+            .find(|c| c.starts_with(last) && **c != last)
+            .map(|c| c[last.len()..].to_string())
+    }
+}
+
+impl Highlighter for ShellCompleter {
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        Cow::Owned(format!("{}", hint.dimmed()))
+    }
+}
+
+impl Validator for ShellCompleter {}
+impl Helper for ShellCompleter {}
+
+fn history_path(home: &std::path::Path, site: Option<&str>) -> PathBuf {
+    let dir = home.join(".webctl").join("history");
+    let _ = std::fs::create_dir_all(&dir);
+    match site {
+        Some(name) => dir.join(format!("{name}.history")),
+        None => dir.join("global.history"),
+    }
 }
 
 pub async fn run_shell() -> anyhow::Result<()> {
@@ -17,13 +160,30 @@ pub async fn run_shell() -> anyhow::Result<()> {
         .map(PathBuf::from)
         .context("HOME not set")?;
 
+    let registry_path = webctl_ir::registry_path(&home);
+    let registry = webctl_ir::RegistryIndex::load(&registry_path)
+        .unwrap_or_else(|_| webctl_ir::RegistryIndex { sites: Vec::new() });
+
+    let site_names: Vec<String> = registry.sites.iter().map(|s| s.site_name.clone()).collect();
+
     let mut state = ShellState {
         current_site: None,
         current_descriptor: None,
-        home,
+        home: home.clone(),
+        site_names: site_names.clone(),
     };
 
-    let mut rl = DefaultEditor::new().context("failed to init readline")?;
+    let completer = ShellCompleter::new(&site_names);
+
+    let config = Config::builder()
+        .auto_add_history(true)
+        .build();
+
+    let mut rl = Editor::with_config(config).context("failed to init readline")?;
+    rl.set_helper(Some(completer));
+
+    let global_history = history_path(&home, None);
+    let _ = rl.load_history(&global_history);
 
     print_welcome(&state);
 
@@ -31,17 +191,15 @@ pub async fn run_shell() -> anyhow::Result<()> {
         let prompt = build_prompt(&state);
         let line = match rl.readline(&prompt) {
             Ok(line) => line,
-            Err(rustyline::error::ReadlineError::Interrupted) => continue,
-            Err(rustyline::error::ReadlineError::Eof) => break,
+            Err(ReadlineError::Interrupted) => continue,
+            Err(ReadlineError::Eof) => break,
             Err(e) => return Err(e.into()),
         };
 
-        let line = line.trim();
+        let line = line.trim().to_string();
         if line.is_empty() {
             continue;
         }
-
-        let _ = rl.add_history_entry(line);
 
         let parts: Vec<&str> = line.split_whitespace().collect();
         let cmd = parts[0];
@@ -51,33 +209,37 @@ pub async fn run_shell() -> anyhow::Result<()> {
             "exit" | "quit" | "q" => break,
             "help" | "?" => print_shell_help(&state),
             "ls" | "list" => list_sites(&state),
+            "clear" => {
+                let _ = rl.clear_screen();
+            }
             "open" => {
                 if args.is_empty() {
                     eprintln!("  usage: open <site>");
                 } else if state.current_site.is_some() && args[0].parse::<usize>().is_ok() {
-                    let full_args = if state.current_site.is_some() {
-                        let site = state.current_site.as_ref().unwrap().clone();
+                    if let Some(ref site) = state.current_site {
                         let mut a = vec!["open"];
                         a.extend_from_slice(args);
-                        dispatch_site_command(&site, &a, &state).await;
-                    } else {
-                        eprintln!("  no site selected. Run: open <site-name>");
-                    };
-                    let _ = full_args;
+                        dispatch_site_command(site, &a, &state).await;
+                    }
                 } else {
-                    open_site(args[0], &mut state);
+                    open_site(args[0], &mut state, &mut rl, &home);
                 }
             }
             "switch" => {
                 if args.is_empty() {
                     eprintln!("  usage: switch <site>");
                 } else {
-                    open_site(args[0], &mut state);
+                    open_site(args[0], &mut state, &mut rl, &home);
                 }
             }
             "back" | "close" => {
+                let _ = rl.save_history(&history_path(&home, state.current_site.as_deref()));
                 state.current_site = None;
                 state.current_descriptor = None;
+                if let Some(h) = rl.helper_mut() {
+                    h.leave_site();
+                }
+                let _ = rl.load_history(&global_history);
             }
             "check" => {
                 if let Some(ref site) = state.current_site {
@@ -92,12 +254,8 @@ pub async fn run_shell() -> anyhow::Result<()> {
                 if let Some(ref site) = state.current_site {
                     dispatch_site_command(site, &parts, &state).await;
                 } else {
-                    let registry_path = webctl_ir::registry_path(&state.home);
-                    let registry = webctl_ir::RegistryIndex::load(&registry_path)
-                        .unwrap_or_else(|_| webctl_ir::RegistryIndex { sites: Vec::new() });
-
-                    if registry.find(cmd).is_some() {
-                        open_site(cmd, &mut state);
+                    if state.site_names.contains(&cmd.to_string()) {
+                        open_site(cmd, &mut state, &mut rl, &home);
                         if !args.is_empty() {
                             let site = state.current_site.as_ref().unwrap().clone();
                             dispatch_site_command(&site, args, &state).await;
@@ -110,8 +268,46 @@ pub async fn run_shell() -> anyhow::Result<()> {
         }
     }
 
+    let hist_path = history_path(&home, state.current_site.as_deref());
+    let _ = rl.save_history(&hist_path);
+
     eprintln!("goodbye");
     Ok(())
+}
+
+fn open_site(name: &str, state: &mut ShellState, rl: &mut Editor<ShellCompleter, rustyline::history::DefaultHistory>, home: &std::path::Path) {
+    let ir_path = webctl_ir::site_ir_path(home, name);
+    if !ir_path.exists() {
+        eprintln!("  site '{name}' not found");
+        return;
+    }
+
+    if let Some(ref prev_site) = state.current_site {
+        let _ = rl.save_history(&history_path(home, Some(prev_site)));
+    } else {
+        let _ = rl.save_history(&history_path(home, None));
+    }
+
+    match webctl_ir::read_ir(&ir_path) {
+        Ok(desc) => {
+            let cmd_count = desc.operations.len();
+            if let Some(h) = rl.helper_mut() {
+                h.enter_site(&desc);
+            }
+            let _ = rl.load_history(&history_path(home, Some(name)));
+            state.current_site = Some(name.to_string());
+            state.current_descriptor = Some(desc);
+
+            if crate::execute::use_color() {
+                eprintln!("  {} ({} commands)", name.cyan().bold(), cmd_count);
+            } else {
+                eprintln!("  {name} ({cmd_count} commands)");
+            }
+        }
+        Err(e) => {
+            eprintln!("  failed to load site '{name}': {e}");
+        }
+    }
 }
 
 fn print_welcome(state: &ShellState) {
@@ -155,6 +351,7 @@ fn print_shell_help(state: &ShellState) {
         eprintln!("    {}    {}", "switch <s>".green(), "Switch to another site".dimmed());
         eprintln!("    {}        {}", "back".green(), "Leave current site context".dimmed());
         eprintln!("    {}   {}", "check [site]".green(), "Check for drift".dimmed());
+        eprintln!("    {}       {}", "clear".green(), "Clear screen".dimmed());
         eprintln!("    {}        {}", "exit".green(), "Quit shell".dimmed());
     } else {
         eprintln!("  Shell commands:");
@@ -163,6 +360,7 @@ fn print_shell_help(state: &ShellState) {
         eprintln!("    switch <s>  Switch to another site");
         eprintln!("    back        Leave current site context");
         eprintln!("    check       Check for drift");
+        eprintln!("    clear       Clear screen");
         eprintln!("    exit        Quit shell");
     }
 
@@ -170,7 +368,7 @@ fn print_shell_help(state: &ShellState) {
         if let Some(ref desc) = state.current_descriptor {
             eprintln!();
             if color {
-                eprintln!("  {} ({})", format!("{site} commands:").dimmed(), desc.operations.len());
+                eprintln!("  {} ({}):", format!("{site} commands").dimmed(), desc.operations.len());
             } else {
                 eprintln!("  {site} commands ({}):", desc.operations.len());
             }
@@ -217,31 +415,6 @@ fn list_sites(state: &ShellState) {
             eprintln!("{marker}{name}  {}", format!("{cmd_count} commands").dimmed());
         } else {
             eprintln!("{marker}{}  {cmd_count} commands", entry.site_name);
-        }
-    }
-}
-
-fn open_site(name: &str, state: &mut ShellState) {
-    let ir_path = webctl_ir::site_ir_path(&state.home, name);
-    if !ir_path.exists() {
-        eprintln!("  site '{name}' not found");
-        return;
-    }
-
-    match webctl_ir::read_ir(&ir_path) {
-        Ok(desc) => {
-            let cmd_count = desc.operations.len();
-            state.current_site = Some(name.to_string());
-            state.current_descriptor = Some(desc);
-
-            if crate::execute::use_color() {
-                eprintln!("  {} ({} commands)", name.cyan().bold(), cmd_count);
-            } else {
-                eprintln!("  {name} ({cmd_count} commands)");
-            }
-        }
-        Err(e) => {
-            eprintln!("  failed to load site '{name}': {e}");
         }
     }
 }
