@@ -66,7 +66,11 @@ fn cmd(msg: &str) {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "webctl", about = "CLI-ify the web")]
+#[command(
+    name = "webctl",
+    about = "CLI-ify the web — turn any website into an installable CLI",
+    after_help = "Getting started:\n  webctl recon <url> --auto --yes\n\nLearn more:\n  https://github.com/crafter-station/webctl"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -233,7 +237,11 @@ async fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -
         || args.args.iter().any(|a| a == "--help" || a == "-h");
 
     if is_help {
-        let help = webctl_emit_cli::build_help_text(descriptor);
+        let help = if crate::execute::use_color() {
+            webctl_emit_cli::build_help_text_colored(descriptor)
+        } else {
+            webctl_emit_cli::build_help_text(descriptor)
+        };
         println!("{help}");
         return Ok(());
     }
@@ -630,7 +638,7 @@ pub async fn install_command(args: InstallArgs) -> anyhow::Result<InstallSuccess
         source_label,
         version_label: descriptor.meta.ir_version.clone(),
     };
-    println!("{}", render_install_progress(&progress));
+    render_install_progress(&progress);
 
     if let Err(errors) = webctl_ir::lint_ir(&descriptor) {
         for error in errors {
@@ -721,28 +729,17 @@ pub async fn install_command(args: InstallArgs) -> anyhow::Result<InstallSuccess
     Ok(view)
 }
 
-pub fn render_classifier_suggestion(view: &ClassifierSuggestionView) -> String {
-    format!(
-        "Suggested bucket: {} ({})\nHTTP endpoints: {}\nAX actions: {}",
-        classifier_bucket_label(&view.bucket),
-        confidence_label(&view.confidence),
-        view.http_endpoint_count,
-        view.ax_action_count
-    )
-}
-
-pub fn render_install_progress(view: &InstallProgressView) -> String {
-    format!(
-        "Installing IR from {} (version {})",
-        view.source_label, view.version_label
-    )
-}
-
-pub fn render_install_success(view: &InstallSuccessView) -> String {
-    format!(
-        "Installed {} with {} commands\n{}",
-        view.site_name, view.command_count, view.hint
-    )
+pub fn render_install_progress(view: &InstallProgressView) {
+    if use_color() {
+        eprintln!("{} {} {} ({})",
+            "⠋".cyan(),
+            "Installing from".dimmed(),
+            view.source_label.white(),
+            format!("v{}", view.version_label).dimmed()
+        );
+    } else {
+        eprintln!("⠋ Installing IR from {} (version {})", view.source_label, view.version_label);
+    }
 }
 
 fn fallback_http_command_path(index: usize, endpoint_path: &str) -> Vec<String> {

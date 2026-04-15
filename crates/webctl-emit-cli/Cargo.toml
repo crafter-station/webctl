@@ -8,6 +8,7 @@ anyhow.workspace = true
 camino.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+owo-colors.workspace = true
 webctl-ir = { path = "../webctl-ir" }
 
 [dev-dependencies]

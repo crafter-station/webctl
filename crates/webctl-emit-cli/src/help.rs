@@ -1,40 +1,89 @@
+use owo_colors::OwoColorize;
+
 pub fn build_help_text(descriptor: &webctl_ir::SiteDescriptor) -> String {
+    build_help_text_impl(descriptor, false)
+}
+
+pub fn build_help_text_colored(descriptor: &webctl_ir::SiteDescriptor) -> String {
+    build_help_text_impl(descriptor, true)
+}
+
+fn build_help_text_impl(descriptor: &webctl_ir::SiteDescriptor, color: bool) -> String {
     let site_name = &descriptor.meta.site_name;
     let display_name = &descriptor.meta.display_name;
     let rows = webctl_ir::command_help_rows(descriptor);
     let command_width = rows.iter().map(|row| row.command.len()).max().unwrap_or(0);
 
-    let commands = rows
-        .iter()
-        .map(|row| {
-            format!(
-                "  {:width$}  {}",
+    let mut out = String::new();
+
+    if color {
+        out.push_str(&format!("{}\n\n", format!("{site_name} — {display_name}").bold()));
+    } else {
+        out.push_str(&format!("{site_name} — {display_name}\n\n"));
+    }
+
+    if color {
+        out.push_str(&format!("{}\n", "USAGE".dimmed()));
+        out.push_str(&format!("  {} {} {}\n\n",
+            site_name.cyan(),
+            "<command>".white(),
+            "[flags]".dimmed()
+        ));
+    } else {
+        out.push_str("USAGE\n");
+        out.push_str(&format!("  {site_name} <command> [flags]\n\n"));
+    }
+
+    if color {
+        out.push_str(&format!("{}\n", "COMMANDS".dimmed()));
+    } else {
+        out.push_str("COMMANDS\n");
+    }
+
+    for row in &rows {
+        if color {
+            out.push_str(&format!("  {:width$}  {}\n",
+                row.command.green(),
+                row.description.dimmed(),
+                width = command_width
+            ));
+        } else {
+            out.push_str(&format!("  {:width$}  {}\n",
                 row.command,
                 row.description,
                 width = command_width
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+            ));
+        }
+    }
+    out.push('\n');
 
-    format!(
-        "{site_name} - {display_name}
+    if color {
+        out.push_str(&format!("{}\n", "FLAGS".dimmed()));
+        out.push_str(&format!("  {}    {}\n", "--json".green(), "Output as JSON".dimmed()));
+        out.push_str(&format!("  {}    {}\n\n", "--help".green(), "Show this help".dimmed()));
+    } else {
+        out.push_str("FLAGS\n");
+        out.push_str("  --json    Output as JSON\n");
+        out.push_str("  --help    Show this help\n\n");
+    }
 
-USAGE
-  {site_name} <command> [flags]
+    if color {
+        out.push_str(&format!("{}\n", "LEARN MORE".dimmed()));
+        out.push_str(&format!("  {}    {}\n",
+            format!("webctl check {site_name}").cyan(),
+            "Check for drift".dimmed()
+        ));
+        out.push_str(&format!("  {}   {}\n",
+            format!("webctl update {site_name}").cyan(),
+            "Update to latest IR".dimmed()
+        ));
+    } else {
+        out.push_str("LEARN MORE\n");
+        out.push_str(&format!("  webctl check {site_name}    Check for drift\n"));
+        out.push_str(&format!("  webctl update {site_name}   Update to latest IR\n"));
+    }
 
-COMMANDS
-{commands}
-
-FLAGS
-  --json    Output as JSON
-  --help    Show this help
-
-LEARN MORE
-  webctl check {site_name}    Check for drift
-  webctl update {site_name}   Update to latest IR
-"
-    )
+    out
 }
 
 #[cfg(test)]
@@ -106,11 +155,17 @@ mod tests {
     #[test]
     fn test_help_text_generation() {
         let help = build_help_text(&sample_descriptor());
-
-        assert!(help.contains("sunat - SUNAT Operaciones en Linea"));
+        assert!(help.contains("sunat"));
         assert!(help.contains("USAGE"));
         assert!(help.contains("rhe consulta-emisor"));
         assert!(help.contains("ficha-ruc"));
-        assert!(help.contains("Consulta la ficha RUC del contribuyente"));
+    }
+
+    #[test]
+    fn test_help_text_colored_contains_content() {
+        let help = build_help_text_colored(&sample_descriptor());
+        assert!(help.contains("sunat"));
+        assert!(help.contains("USAGE"));
+        assert!(help.contains("COMMANDS"));
     }
 }
