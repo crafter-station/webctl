@@ -157,7 +157,7 @@ pub async fn exec_command(args: ExecArgs) -> anyhow::Result<()> {
         if let Some(entry) = registry.find(&args.site) {
             let descriptor = webctl_ir::read_ir(&entry.ir_path)
                 .with_context(|| format!("failed to read IR for site '{}'", args.site))?;
-            return exec_with_ir(&descriptor, &args);
+            return exec_with_ir(&descriptor, &args).await;
         }
 
         let installed = registry.sites.iter().map(|s| &s.site_name).collect::<Vec<_>>();
@@ -172,10 +172,10 @@ pub async fn exec_command(args: ExecArgs) -> anyhow::Result<()> {
 
     let descriptor = webctl_ir::read_ir(&ir_path)
         .with_context(|| format!("failed to read IR for site '{}'", args.site))?;
-    exec_with_ir(&descriptor, &args)
+    exec_with_ir(&descriptor, &args).await
 }
 
-fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -> anyhow::Result<()> {
+async fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -> anyhow::Result<()> {
     let is_help = args.args.is_empty()
         || args.args.iter().any(|a| a == "--help" || a == "-h");
 
@@ -185,17 +185,56 @@ fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -> anyh
         return Ok(());
     }
 
-    Err(anyhow!(
-        "command execution is not yet implemented in this build.\n\
-         Available commands for '{}':\n{}\n\n  \
-         Use --help to see command details.",
-        args.site,
-        webctl_ir::command_help_rows(descriptor)
+    let is_json = args.args.iter().any(|a| a == "--json");
+    let cmd_args: Vec<&str> = args.args.iter()
+        .map(|s| s.as_str())
+        .filter(|s| *s != "--json")
+        .collect();
+
+    let command_key = cmd_args.join(" ");
+    let operation = descriptor.operations.iter().find(|op| {
+        op.command_path.join(" ") == command_key
+    });
+
+    let Some(operation) = operation else {
+        let available = webctl_ir::command_help_rows(descriptor)
             .iter()
             .map(|r| format!("    {}  {}", r.command, r.description))
             .collect::<Vec<_>>()
-            .join("\n")
-    ))
+            .join("\n");
+        return Err(anyhow!(
+            "unknown command '{}' for site '{}'\n\nAvailable commands:\n{}\n",
+            command_key, args.site, available
+        ));
+    };
+
+    let url = match &operation.transport {
+        webctl_ir::OperationTransport::Http(http_op) => {
+            let endpoint = descriptor.http.as_ref()
+                .and_then(|h| h.endpoints.get(http_op.endpoint_index))
+                .ok_or_else(|| anyhow!("endpoint index {} out of bounds", http_op.endpoint_index))?;
+            let base = url::Url::parse(&descriptor.meta.source_url)
+                .map(|u| format!("{}://{}", u.scheme(), u.host_str().unwrap_or("localhost")))
+                .unwrap_or_else(|_| descriptor.meta.source_url.clone());
+            format!("{}{}", base, endpoint.path)
+        }
+        webctl_ir::OperationTransport::Ax(_) => {
+            return Err(anyhow!("AX-based command execution is not yet implemented"));
+        }
+    };
+
+    let result = crate::execute::fetch_page(&url).await
+        .with_context(|| format!("failed to fetch {url}"))?;
+
+    if is_json {
+        let json = crate::execute::format_json(&result)?;
+        println!("{json}");
+    } else {
+        let formatted = crate::execute::format_human(&result, &args.site, &command_key);
+        println!("{formatted}");
+    }
+
+    Ok(())
 }
 
 pub async fn recon_command(args: ReconArgs) -> anyhow::Result<webctl_ir::SiteDescriptor> {
