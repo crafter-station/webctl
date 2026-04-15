@@ -194,6 +194,7 @@ pub struct EmitArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum EmitTargetArg {
     Cli { ir_path: PathBuf },
+    JustBash { ir_path: PathBuf },
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -724,21 +725,48 @@ pub fn build_ir(
 pub async fn emit_command(args: EmitArgs) -> anyhow::Result<std::path::PathBuf> {
     let (ir_path, target_label) = match &args.target {
         EmitTargetArg::Cli { ir_path } => (ir_path.clone(), "cli"),
+        EmitTargetArg::JustBash { ir_path } => (ir_path.clone(), "just-bash"),
     };
     let descriptor = webctl_ir::read_ir(&ir_path)
         .with_context(|| format!("failed to read IR from {}", ir_path.display()))?;
 
     if let Err(errors) = webctl_ir::lint_ir(&descriptor) {
         for error in errors {
-            println!("warning: {error}");
+            eprintln!("warning: {error}");
         }
+    }
+
+    if target_label == "just-bash" {
+        let out_dir = args.out_dir.unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join("emit")
+                .join("just-bash")
+        });
+        std::fs::create_dir_all(&out_dir)
+            .with_context(|| format!("failed to create {}", out_dir.display()))?;
+
+        let config_content = webctl_emit_cli::emit_executor_config(&descriptor);
+        let config_path = out_dir.join(format!("{}.config.ts", descriptor.meta.site_name));
+        std::fs::write(&config_path, &config_content)
+            .with_context(|| format!("failed to write {}", config_path.display()))?;
+
+        let size = config_content.len();
+        ok(&format!("ExecutorConfig written: {} ({}B)", config_path.display(), size));
+        eprintln!();
+        hint("Usage in just-bash:");
+        cmd(&format!("import {{ executorConfig }} from \"./{}.config\";", descriptor.meta.site_name));
+        cmd("const bash = new Bash({ executor: executorConfig });");
+        cmd(&format!("await bash.exec('{} --help');", descriptor.meta.site_name));
+
+        return Ok(config_path);
     }
 
     let out_dir = args.out_dir.unwrap_or_else(|| {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("emit")
-            .join(target_label)
+            .join("cli")
             .join(&descriptor.meta.site_name)
     });
     let emitted = webctl_emit_cli::emit_cli_shim(webctl_emit_cli::CliEmitRequest {

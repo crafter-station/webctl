@@ -1638,6 +1638,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "url",
  "webctl-ir",
 ]
 
