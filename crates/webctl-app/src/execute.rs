@@ -45,7 +45,12 @@ pub async fn fetch_page(url: &str) -> anyhow::Result<ExecResult> {
     })
 }
 
-pub fn format_human(result: &ExecResult, site_name: &str, command: &str) -> String {
+pub fn format_human(
+    result: &ExecResult,
+    site_name: &str,
+    command: &str,
+    descriptor: &webctl_ir::SiteDescriptor,
+) -> String {
     let color = use_color();
     let mut output = String::new();
 
@@ -78,21 +83,9 @@ pub fn format_human(result: &ExecResult, site_name: &str, command: &str) -> Stri
     }
 
     output.push('\n');
-    if color {
-        output.push_str(&format!("  {}\n", "Next steps:".dimmed()));
-        output.push_str(&format!("    {}       {}\n",
-            format!("{site_name} {command} --json").cyan(),
-            "Machine-readable output".dimmed()
-        ));
-        output.push_str(&format!("    {}                 {}\n",
-            format!("{site_name} --help").cyan(),
-            "All commands".dimmed()
-        ));
-    } else {
-        output.push_str("  Next steps:\n");
-        output.push_str(&format!("    {site_name} {command} --json       Machine-readable output\n"));
-        output.push_str(&format!("    {site_name} --help                 All commands\n"));
-    }
+    output.push_str(&webctl_emit_cli::build_next_steps_after_exec(
+        site_name, command, descriptor, color,
+    ));
 
     output
 }

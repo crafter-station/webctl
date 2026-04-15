@@ -9,50 +9,32 @@ pub fn build_help_text_colored(descriptor: &webctl_ir::SiteDescriptor) -> String
 }
 
 fn build_help_text_impl(descriptor: &webctl_ir::SiteDescriptor, color: bool) -> String {
-    let site_name = &descriptor.meta.site_name;
-    let display_name = &descriptor.meta.display_name;
+    let site = &descriptor.meta.site_name;
+    let display = &descriptor.meta.display_name;
     let rows = webctl_ir::command_help_rows(descriptor);
-    let command_width = rows.iter().map(|row| row.command.len()).max().unwrap_or(0);
+    let cmd_width = rows.iter().map(|r| r.command.len()).max().unwrap_or(0);
 
     let mut out = String::new();
 
     if color {
-        out.push_str(&format!("{}\n\n", format!("{site_name} — {display_name}").bold()));
-    } else {
-        out.push_str(&format!("{site_name} — {display_name}\n\n"));
-    }
-
-    if color {
+        out.push_str(&format!("{}\n\n", format!("{site} — {display}").bold()));
         out.push_str(&format!("{}\n", "USAGE".dimmed()));
-        out.push_str(&format!("  {} {} {}\n\n",
-            site_name.cyan(),
-            "<command>".white(),
-            "[flags]".dimmed()
-        ));
-    } else {
-        out.push_str("USAGE\n");
-        out.push_str(&format!("  {site_name} <command> [flags]\n\n"));
-    }
-
-    if color {
+        out.push_str(&format!("  {} {} {}\n\n", site.cyan(), "<command>".white(), "[flags]".dimmed()));
         out.push_str(&format!("{}\n", "COMMANDS".dimmed()));
     } else {
+        out.push_str(&format!("{site} — {display}\n\n"));
+        out.push_str("USAGE\n");
+        out.push_str(&format!("  {site} <command> [flags]\n\n"));
         out.push_str("COMMANDS\n");
     }
 
     for row in &rows {
         if color {
             out.push_str(&format!("  {:width$}  {}\n",
-                row.command.green(),
-                row.description.dimmed(),
-                width = command_width
-            ));
+                row.command.green(), row.description.dimmed(), width = cmd_width));
         } else {
             out.push_str(&format!("  {:width$}  {}\n",
-                row.command,
-                row.description,
-                width = command_width
-            ));
+                row.command, row.description, width = cmd_width));
         }
     }
     out.push('\n');
@@ -67,23 +49,108 @@ fn build_help_text_impl(descriptor: &webctl_ir::SiteDescriptor, color: bool) -> 
         out.push_str("  --help    Show this help\n\n");
     }
 
+    let examples = pick_examples(site, &rows);
+    if !examples.is_empty() {
+        if color {
+            out.push_str(&format!("{}\n", "TRY IT".dimmed()));
+        } else {
+            out.push_str("TRY IT\n");
+        }
+        for (cmd, desc) in &examples {
+            if color {
+                out.push_str(&format!("  {}  {}\n", cmd.cyan(), desc.dimmed()));
+            } else {
+                out.push_str(&format!("  {cmd}  {desc}\n"));
+            }
+        }
+        out.push('\n');
+    }
+
     if color {
         out.push_str(&format!("{}\n", "LEARN MORE".dimmed()));
         out.push_str(&format!("  {}    {}\n",
-            format!("webctl check {site_name}").cyan(),
-            "Check for drift".dimmed()
-        ));
+            format!("webctl check {site}").cyan(), "Check for drift".dimmed()));
         out.push_str(&format!("  {}   {}\n",
-            format!("webctl update {site_name}").cyan(),
-            "Update to latest IR".dimmed()
-        ));
+            format!("webctl update {site}").cyan(), "Update to latest IR".dimmed()));
     } else {
         out.push_str("LEARN MORE\n");
-        out.push_str(&format!("  webctl check {site_name}    Check for drift\n"));
-        out.push_str(&format!("  webctl update {site_name}   Update to latest IR\n"));
+        out.push_str(&format!("  webctl check {site}    Check for drift\n"));
+        out.push_str(&format!("  webctl update {site}   Update to latest IR\n"));
     }
 
     out
+}
+
+pub fn build_next_steps_after_exec(
+    site: &str,
+    current_command: &str,
+    descriptor: &webctl_ir::SiteDescriptor,
+    color: bool,
+) -> String {
+    let rows = webctl_ir::command_help_rows(descriptor);
+    let other_commands: Vec<&webctl_ir::CommandHelpRow> = rows
+        .iter()
+        .filter(|r| r.command != current_command)
+        .collect();
+
+    let mut out = String::new();
+
+    if color {
+        out.push_str(&format!("  {}\n", "Next:".dimmed()));
+        out.push_str(&format!("    {}  {}\n",
+            format!("{site} {current_command} --json").cyan(),
+            "Machine-readable output".dimmed()));
+    } else {
+        out.push_str("  Next:\n");
+        out.push_str(&format!("    {site} {current_command} --json  Machine-readable output\n"));
+    }
+
+    let suggestions: Vec<&&webctl_ir::CommandHelpRow> = other_commands.iter().take(3).collect();
+    if !suggestions.is_empty() {
+        if color {
+            out.push_str(&format!("  {}\n", "Other commands:".dimmed()));
+        } else {
+            out.push_str("  Other commands:\n");
+        }
+        for row in suggestions {
+            if color {
+                out.push_str(&format!("    {}  {}\n",
+                    format!("{site} {}", row.command).cyan(),
+                    row.description.dimmed()));
+            } else {
+                out.push_str(&format!("    {site} {}  {}\n", row.command, row.description));
+            }
+        }
+    }
+
+    out
+}
+
+fn pick_examples(site: &str, rows: &[webctl_ir::CommandHelpRow]) -> Vec<(String, String)> {
+    let mut examples = Vec::new();
+
+    if let Some(first) = rows.first() {
+        examples.push((
+            format!("{site} {}", first.command),
+            first.description.clone(),
+        ));
+    }
+
+    if let Some(second) = rows.get(1) {
+        examples.push((
+            format!("{site} {} --json", second.command),
+            format!("{} (JSON output)", second.description),
+        ));
+    }
+
+    if rows.len() > 2 {
+        examples.push((
+            format!("{site} --help"),
+            format!("See all {} commands", rows.len()),
+        ));
+    }
+
+    examples
 }
 
 #[cfg(test)]
@@ -132,9 +199,7 @@ mod tests {
                         path: "/ol-ti-itreciboelectronico/cpelec001Alias".into(),
                         description: "Consulta emisor".into(),
                         operation_kind: webctl_ir::OperationKind::Read,
-                        sample_request_content_type: Some(
-                            "application/x-www-form-urlencoded".into(),
-                        ),
+                        sample_request_content_type: Some("application/x-www-form-urlencoded".into()),
                         sample_response_content_type: Some("text/html".into()),
                     },
                     webctl_ir::HttpEndpoint {
@@ -153,19 +218,19 @@ mod tests {
     }
 
     #[test]
-    fn test_help_text_generation() {
+    fn help_has_try_it_section() {
         let help = build_help_text(&sample_descriptor());
-        assert!(help.contains("sunat"));
-        assert!(help.contains("USAGE"));
-        assert!(help.contains("rhe consulta-emisor"));
-        assert!(help.contains("ficha-ruc"));
+        assert!(help.contains("TRY IT"));
+        assert!(help.contains("sunat rhe consulta-emisor"));
+        assert!(help.contains("sunat ficha-ruc --json"));
     }
 
     #[test]
-    fn test_help_text_colored_contains_content() {
-        let help = build_help_text_colored(&sample_descriptor());
-        assert!(help.contains("sunat"));
-        assert!(help.contains("USAGE"));
-        assert!(help.contains("COMMANDS"));
+    fn next_steps_shows_other_commands() {
+        let d = sample_descriptor();
+        let next = build_next_steps_after_exec("sunat", "rhe consulta-emisor", &d, false);
+        assert!(next.contains("sunat rhe consulta-emisor --json"));
+        assert!(next.contains("sunat ficha-ruc"));
+        assert!(next.contains("Other commands:"));
     }
 }

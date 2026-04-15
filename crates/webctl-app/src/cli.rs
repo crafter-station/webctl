@@ -291,7 +291,7 @@ async fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -
         let json = crate::execute::format_json(&result)?;
         println!("{json}");
     } else {
-        let formatted = crate::execute::format_human(&result, &args.site, &command_key);
+        let formatted = crate::execute::format_human(&result, &args.site, &command_key, descriptor);
         println!("{formatted}");
     }
 
