@@ -83,6 +83,35 @@ pub enum Commands {
     Install(InstallArgs),
     Lint(LintArgs),
     Exec(ExecArgs),
+    Auth(AuthArgs),
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct AuthArgs {
+    #[command(subcommand)]
+    pub action: AuthAction,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum AuthAction {
+    Login(AuthLoginArgs),
+    Status(AuthStatusArgs),
+    Logout(AuthLogoutArgs),
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct AuthLoginArgs {
+    pub site: String,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct AuthStatusArgs {
+    pub site: String,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct AuthLogoutArgs {
+    pub site: String,
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -200,6 +229,7 @@ pub async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         Commands::Install(args) => install::run(args).await,
         Commands::Lint(args) => lint::run(args),
         Commands::Exec(args) => exec_command(args).await,
+        Commands::Auth(args) => auth_command(args).await,
     }
 }
 
@@ -309,8 +339,14 @@ async fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -
     if let Some(ref extractor) = operation.extractor {
         save_last_command(&args.site, &command_key);
 
-        let html = crate::execute::fetch_raw_html(&url).await
-            .with_context(|| format!("failed to fetch {url}"))?;
+        let session = crate::execute::get_session_name(&args.site);
+        let html = if let Some(ref session_name) = session {
+            crate::execute::fetch_authenticated_html(&url, session_name).await
+                .with_context(|| format!("failed to fetch {url} with authenticated session"))?
+        } else {
+            crate::execute::fetch_raw_html(&url).await
+                .with_context(|| format!("failed to fetch {url}"))?
+        };
 
         if let Some(items) = crate::extract::extract_items(&html, extractor) {
             if is_json {
@@ -326,8 +362,22 @@ async fn exec_with_ir(descriptor: &webctl_ir::SiteDescriptor, args: &ExecArgs) -
         }
     }
 
-    let result = crate::execute::fetch_page(&url).await
-        .with_context(|| format!("failed to fetch {url}"))?;
+    let session = crate::execute::get_session_name(&args.site);
+    let result = if let Some(ref session_name) = session {
+        let html = crate::execute::fetch_authenticated_html(&url, session_name).await
+            .with_context(|| format!("failed to fetch {url} with authenticated session"))?;
+        let text = crate::execute::html_to_text_public(&html);
+        crate::execute::ExecResult {
+            status: 200,
+            url: url.clone(),
+            title: descriptor.meta.display_name.clone(),
+            content: text,
+            word_count: 0,
+        }
+    } else {
+        crate::execute::fetch_page(&url).await
+            .with_context(|| format!("failed to fetch {url}"))?
+    };
 
     if is_json {
         let json = crate::execute::format_json(&result)?;
@@ -880,6 +930,85 @@ async fn open_item_by_index(
     hint(item_url);
 
     open_url_in_browser(item_url).await?;
+    Ok(())
+}
+
+async fn auth_command(args: AuthArgs) -> anyhow::Result<()> {
+    match args.action {
+        AuthAction::Login(login) => auth_login(login).await,
+        AuthAction::Status(status) => auth_status(status).await,
+        AuthAction::Logout(logout) => auth_logout(logout).await,
+    }
+}
+
+async fn auth_login(args: AuthLoginArgs) -> anyhow::Result<()> {
+    let home = home_dir()?;
+    let ir_path = webctl_ir::site_ir_path(&home, &args.site);
+    if !ir_path.exists() {
+        return Err(anyhow!("site '{}' not installed. Run: webctl install <ir_path>", args.site));
+    }
+
+    let descriptor = webctl_ir::read_ir(&ir_path)?;
+    let login_url = &descriptor.meta.source_url;
+    let session_name = format!("webctl-{}", args.site);
+
+    step(&format!("Opening {} for authentication...", login_url));
+    hint("Log in normally in the browser window.");
+    hint("Press ENTER here when you're logged in.");
+
+    let browser = webctl_probe::agent_browser::BrowserProcess {
+        child_id: 0,
+        cdp_port: 9222,
+        profile_dir: std::path::PathBuf::new(),
+    };
+    let probe_opts = webctl_probe::ProbeOptions {
+        url: login_url.clone(),
+        visible: true,
+        output_dir: std::env::temp_dir().join(format!("webctl-auth-{}", args.site)),
+    };
+    let session = webctl_probe::agent_browser::connect_session(browser, &probe_opts).await
+        .context("failed to connect to browser. Is Comet running with --remote-debugging-port=9222?")?;
+
+    ok(&format!("Browser opened: {}", login_url));
+    eprintln!();
+    step("Waiting for you to log in... press ENTER when done.");
+    wait_for_enter().await?;
+
+    let session_dir = webctl_ir::site_dir(&home, &args.site);
+    std::fs::create_dir_all(&session_dir)?;
+    let session_file = session_dir.join("session-name");
+    std::fs::write(&session_file, &session_name)?;
+
+    ok(&format!("Session saved for '{}'. Commands will now use authenticated state.", args.site));
+    hint(&format!("Try: {} --help", args.site));
+
+    Ok(())
+}
+
+async fn auth_status(args: AuthStatusArgs) -> anyhow::Result<()> {
+    let home = home_dir()?;
+    let session_file = webctl_ir::site_dir(&home, &args.site).join("session-name");
+
+    if session_file.exists() {
+        let session = std::fs::read_to_string(&session_file)?;
+        ok(&format!("Site '{}' has authenticated session: {}", args.site, session));
+    } else {
+        warn(&format!("Site '{}' has no authenticated session.", args.site));
+        hint(&format!("Run: webctl auth login {}", args.site));
+    }
+    Ok(())
+}
+
+async fn auth_logout(args: AuthLogoutArgs) -> anyhow::Result<()> {
+    let home = home_dir()?;
+    let session_file = webctl_ir::site_dir(&home, &args.site).join("session-name");
+
+    if session_file.exists() {
+        std::fs::remove_file(&session_file)?;
+        ok(&format!("Logged out of '{}'.", args.site));
+    } else {
+        hint(&format!("Site '{}' was not logged in.", args.site));
+    }
     Ok(())
 }
 

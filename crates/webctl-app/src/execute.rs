@@ -133,6 +133,56 @@ pub async fn fetch_raw_html(url: &str) -> anyhow::Result<String> {
     Ok(parsed.content)
 }
 
+pub async fn fetch_authenticated_html(url: &str, session_name: &str) -> anyhow::Result<String> {
+    let ab = webctl_probe::agent_browser::agent_browser_bin_public();
+
+    let connect = Command::new(&ab)
+        .args(["--session", session_name, "connect", "9222"])
+        .output()
+        .await;
+
+    if connect.is_err() || !connect.as_ref().unwrap().status.success() {
+        let open = Command::new(&ab)
+            .args(["--session", session_name, "open", url])
+            .output()
+            .await
+            .context("failed to open URL in authenticated session")?;
+        if !open.status.success() {
+            return Err(anyhow!("agent-browser open failed: {}", String::from_utf8_lossy(&open.stderr)));
+        }
+    } else {
+        let open = Command::new(&ab)
+            .args(["--session", session_name, "open", url])
+            .output()
+            .await
+            .context("failed to navigate in authenticated session")?;
+        if !open.status.success() {
+            return Err(anyhow!("agent-browser open failed: {}", String::from_utf8_lossy(&open.stderr)));
+        }
+    }
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let html_output = Command::new(&ab)
+        .args(["--session", session_name, "eval", "document.documentElement.outerHTML"])
+        .output()
+        .await
+        .context("failed to extract HTML from authenticated page")?;
+
+    if !html_output.status.success() {
+        return Err(anyhow!("failed to get page HTML: {}", String::from_utf8_lossy(&html_output.stderr)));
+    }
+
+    Ok(String::from_utf8_lossy(&html_output.stdout).to_string())
+}
+
+pub fn get_session_name(site_name: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let session_file = webctl_ir::site_dir(&std::path::PathBuf::from(home), site_name)
+        .join("session-name");
+    std::fs::read_to_string(session_file).ok()
+}
+
 pub fn format_extracted_human(
     items: &[webctl_ir::ExtractedItem],
     site_name: &str,
@@ -248,6 +298,10 @@ pub fn format_extracted_json(items: &[webctl_ir::ExtractedItem], url: &str, titl
 
 pub fn format_json(result: &ExecResult) -> anyhow::Result<String> {
     serde_json::to_string_pretty(result).context("failed to serialize exec result")
+}
+
+pub fn html_to_text_public(html: &str) -> String {
+    html_to_text(html)
 }
 
 fn html_to_text(html: &str) -> String {

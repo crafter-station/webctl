@@ -210,6 +210,10 @@ pub async fn snapshot_text(session: &ProbeSession) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+pub fn agent_browser_bin_public() -> String {
+    agent_browser_bin()
+}
+
 fn agent_browser_bin() -> String {
     if let Ok(bin) = std::env::var("AGENT_BROWSER_BIN") {
         return bin;
