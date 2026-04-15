@@ -116,6 +116,7 @@ mod tests {
                 transport: webctl_ir::OperationTransport::Http(webctl_ir::HttpOperation {
                     endpoint_index: 0,
                 }),
+                    extractor: None,
             }],
             http: Some(webctl_ir::HttpSurface {
                 endpoints: vec![webctl_ir::HttpEndpoint {

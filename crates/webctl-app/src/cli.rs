@@ -539,6 +539,7 @@ pub fn build_ir(
                 transport: webctl_ir::OperationTransport::Http(webctl_ir::HttpOperation {
                     endpoint_index: index,
                 }),
+                extractor: None,
             });
         }
     }
@@ -564,6 +565,7 @@ pub fn build_ir(
                     transport: webctl_ir::OperationTransport::Ax(webctl_ir::AxOperation {
                         action_index: index,
                     }),
+                    extractor: None,
                 });
             }
         }

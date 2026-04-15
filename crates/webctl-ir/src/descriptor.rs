@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{AxSurface, HttpSurface, Provenance, SiteMeta};
+use crate::{AxSurface, Extractor, HttpSurface, Provenance, SiteMeta};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +22,8 @@ pub struct OperationDescriptor {
     pub description: String,
     pub operation_kind: OperationKind,
     pub transport: OperationTransport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extractor: Option<Extractor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

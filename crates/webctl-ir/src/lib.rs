@@ -1,5 +1,6 @@
 pub mod ax;
 pub mod descriptor;
+pub mod extractor;
 pub mod http;
 pub mod lint;
 pub mod meta;
@@ -8,6 +9,7 @@ pub mod registry;
 
 pub use ax::*;
 pub use descriptor::*;
+pub use extractor::*;
 pub use http::*;
 pub use lint::*;
 pub use meta::*;
@@ -39,6 +41,7 @@ mod tests {
                     description: "Consulta recibos por honorarios electronicos emitidos en un rango de fechas".into(),
                     operation_kind: OperationKind::Read,
                     transport: OperationTransport::Http(HttpOperation { endpoint_index: 0 }),
+                    extractor: None,
                 },
                 OperationDescriptor {
                     command_path: vec!["ficha-ruc".into()],
@@ -46,6 +49,7 @@ mod tests {
                     description: "Consulta la ficha RUC del contribuyente".into(),
                     operation_kind: OperationKind::Read,
                     transport: OperationTransport::Http(HttpOperation { endpoint_index: 1 }),
+                    extractor: None,
                 },
             ],
             http: Some(HttpSurface {
