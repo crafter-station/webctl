@@ -28,11 +28,11 @@ The same IR feeds multiple runtimes: standalone CLI shims, [just-bash](https://g
 
 ## How it works
 
-1. **Recon** — `webctl recon <url> --auto` opens a browser, autonomously navigates the site, captures HTTP traffic, classifies the backend archetype, detects repeating content patterns, and emits a declarative IR.
+1. **Recon**. `webctl recon <url> --auto` opens a browser, autonomously navigates the site, captures HTTP traffic, classifies the backend archetype, detects repeating content patterns, and emits a declarative IR.
 
-2. **Install** — `webctl install <ir>` generates a thin CLI shim (~300KB) and places it in your PATH.
+2. **Install**. `webctl install <ir>` generates a thin CLI shim (~300KB) and places it in your PATH.
 
-3. **Use** — The installed CLI fetches live data from the site, extracts structured content via CSS selectors, and renders it as a formatted list or JSON.
+3. **Use**. The installed CLI fetches live data from the site, extracts structured content via CSS selectors, and renders it as a formatted list or JSON.
 
 ## Commands
 
@@ -59,31 +59,34 @@ webctl exec <site> <command>           Run a command (used by shims)
 
 ## Requirements
 
-- [agent-browser](https://github.com/vercel-labs/agent-browser) — browser automation
-- [defuddle](https://github.com/anthropics/defuddle) — HTML content extraction
+- [agent-browser](https://github.com/vercel-labs/agent-browser) for browser automation
+- [defuddle](https://github.com/anthropics/defuddle) for HTML content extraction
 - Rust toolchain (for shim compilation)
 - A Chromium browser with `--remote-debugging-port=9222`
 
 ## Quick start
 
-```bash
-# Install webctl
-git clone https://github.com/crafter-station/webctl
-cd webctl && cargo build
-ln -sf $(pwd)/target/debug/webctl ~/.local/bin/webctl
+Skip recon and try a pre-generated IR shipped in [`examples/`](./examples):
 
+```bash
+git clone https://github.com/crafter-station/webctl
+cd webctl && cargo build --release
+export PATH="$PWD/target/release:$PATH"
+
+webctl install ./examples/news-ycombinator-com.webctl.json --dest ~/.local/bin
+news-ycombinator-com news --json | jq '.items[].fields.title.value'
+news-ycombinator-com open 1
+```
+
+To recon your own site, you also need a Chromium with debugging enabled:
+
+```bash
 # Start a browser with debugging
 /Applications/Comet.app/Contents/MacOS/Comet --remote-debugging-port=9222 &
 # or: google-chrome --remote-debugging-port=9222 &
 
-# Recon a site
-webctl recon https://news.ycombinator.com --auto --yes
-
-# Install and use
-webctl install ./webctl-recon-news-ycombinator-com/news-ycombinator-com.webctl.json
-news-ycombinator-com news
-news-ycombinator-com news --json | jq '.items[].fields.title.value'
-news-ycombinator-com open 1
+webctl recon https://your-site.example --auto --yes
+webctl install ./webctl-recon-your-site-example/your-site-example.webctl.json
 ```
 
 ## Architecture
