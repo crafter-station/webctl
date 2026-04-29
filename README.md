@@ -66,17 +66,16 @@ webctl exec <site> <command>           Run a command (used by shims)
 
 ## Quick start
 
-Skip recon and try a pre-generated IR shipped in [`examples/`](./examples):
+Skip recon. Install webctl and a pre-generated IR for Hacker News in 4 lines:
 
 ```bash
-git clone https://github.com/crafter-station/webctl
-cd webctl && cargo build --release
-export PATH="$PWD/target/release:$PATH"
-
-webctl install ./examples/news-ycombinator-com.webctl.json --dest ~/.local/bin
+cargo install --git https://github.com/crafter-station/webctl webctl
+curl -O https://raw.githubusercontent.com/crafter-station/webctl/main/examples/news-ycombinator-com.webctl.json
+webctl install ./news-ycombinator-com.webctl.json --dest ~/.cargo/bin
 news-ycombinator-com news --json | jq '.items[].fields.title.value'
-news-ycombinator-com open 1
 ```
+
+That's the full pipeline against Hacker News with zero LLM tokens at runtime. More IRs in [`examples/`](./examples) (SUNAT, more on the way).
 
 To recon your own site, you also need a Chromium with debugging enabled:
 

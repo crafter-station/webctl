@@ -2,27 +2,22 @@
 
 Pre-generated IRs you can install directly without running `recon`. Skip the browser setup, see the pipeline work end-to-end in 30 seconds.
 
-## Try it
-
-Build webctl first if you haven't:
+## Try it (4 lines)
 
 ```bash
-cargo build --release
-export PATH="$PWD/target/release:$PATH"
+cargo install --git https://github.com/crafter-station/webctl webctl
+curl -O https://raw.githubusercontent.com/crafter-station/webctl/main/examples/news-ycombinator-com.webctl.json
+webctl install ./news-ycombinator-com.webctl.json --dest ~/.cargo/bin
+news-ycombinator-com news --json | jq '.items[0:3]'
 ```
 
-Install one of the example IRs:
+That's it. No clone, no build, no Chromium.
 
-```bash
-webctl install ./examples/news-ycombinator-com.webctl.json --dest ~/.local/bin
-```
-
-Use it:
+If you want to use it interactively after install:
 
 ```bash
 news-ycombinator-com --help
 news-ycombinator-com news
-news-ycombinator-com news --json | jq '.items[0:3]'
 news-ycombinator-com open 1
 ```
 
